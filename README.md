@@ -36,6 +36,19 @@ Inaccessible reports fail a run rather than silently producing an incomplete wor
 
 Settings are stored in `servers.json`. Existing settings saved through the earlier Python DM wizard are compatible. Tokens stay in `.env` or the `DISCORD_BOT_TOKEN` environment variable. Local configuration and token files are ignored by Git. Python is no longer required.
 
+## Hourly ping
+
+While the bot is running, it sends only `<@316403263559827457>` to thread
+`1562214903090253844` every hour at `:00` on the machine's local clock.
+The first ping is at the next hour after startup. Missed hours are not replayed.
+Only that user is allowed to be mentioned. The bot needs access to the thread
+and Send Messages in Threads permission. Failed sends are logged; the next
+attempt is at the following hour. Restart the bot after updating.
+
+Anyone can use `/ping` in a server or the bot's DMs to send an immediate test
+ping to the same thread. The thread receives only the user mention. This does
+not change the hourly schedule.
+
 ## Test
 
 ```powershell

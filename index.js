@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { readFileSync, writeFileSync, renameSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { centralDate, parseTime, sendWorklist } from './worklist.js';
+import { startHourlyPing, sendPing, pingThreadId } from './hourly-ping.js';
 
 const file = name => fileURLToPath(new URL(name, import.meta.url));
 function read(name) {
@@ -28,6 +29,9 @@ const worklistCommand = new SlashCommandBuilder().setName('worklist')
   .setDescription('Send a fresh bug worklist to the configured report channel')
   .setContexts(InteractionContextType.Guild, InteractionContextType.BotDM);
 const sending = new Set();
+const pingCommand = new SlashCommandBuilder().setName('ping')
+  .setDescription('Send a test ping in the hourly ping thread')
+  .setContexts(InteractionContextType.Guild, InteractionContextType.BotDM);
 async function sendFresh(config) {
   if (sending.has(config.guild_id)) throw new Error('A worklist is already being generated for this server.');
   sending.add(config.guild_id);
@@ -59,6 +63,15 @@ function next(s, step, title, options) {
 
 client.on(Events.InteractionCreate, async i => {
   try {
+    if (i.isChatInputCommand() && i.commandName === 'ping') {
+      await i.deferReply(i.inGuild() ? { flags: 64 } : {});
+      await sendPing(client.rest);
+      await i.editReply({
+        content: `Test ping sent in <#${pingThreadId}>.`,
+        allowedMentions: { parse: [] },
+      });
+      return;
+    }
     if (i.isChatInputCommand() && i.commandName === 'worklist') {
       await i.deferReply(i.inGuild() ? { flags: 64 } : {});
       const configs = read('servers.json');
@@ -225,13 +238,17 @@ async function tick() {
   finally { running = false; }
 }
 client.once(Events.ClientReady, async () => {
+  startHourlyPing(client.rest);
   try {
     // Upsert only this command, preserving any unrelated application commands.
     await client.application.commands.create(setup.toJSON());
     await client.application.commands.create(worklistCommand.toJSON());
+    await client.application.commands.create(pingCommand.toJSON());
     for (const guildId of Object.keys(read('servers.json'))) {
       const { contexts, integration_types, ...guildCommand } = worklistCommand.toJSON();
       await client.application.commands.create(guildCommand, guildId);
+      const { contexts: pingContexts, integration_types: pingIntegrationTypes, ...guildPingCommand } = pingCommand.toJSON();
+      await client.application.commands.create(guildPingCommand, guildId);
     }
     console.log(`Ready as ${client.user.tag}. DM /setup or use /worklist in the report channel.`);
     await tick();
