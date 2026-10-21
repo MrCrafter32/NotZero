@@ -28,6 +28,23 @@ No channel or role IDs need to be copied. Run `/setup` again to replace settings
 
 ## Daily behavior
 
+### Suggestions reports
+
+In `/setup`, choose your server, then **Bugs** or **Suggestions**. Each type
+has its own forum, report channel, roles, and daily time. Setting up Suggestions
+preserves existing Bugs settings; repeating setup replaces only the chosen type.
+
+For Suggestions, select only the **manager/owner roles** whose replies count as
+feedback received. Reports group posts into **Awaiting management review** and
+**Feedback received**. General staff replies alone still await management review.
+All suggestions are included, even archived posts; no Squashed tag is required
+and no tag filtering is applied. The bot does not modify posts or tags.
+Both report types use fixed UTC−6 for their daily schedules.
+
+Use `/worklist type:Suggestions` in its configured report channel to run it
+manually, or choose a server and report in DMs. In servers, `/worklist` defaults
+to Bugs. Existing bug settings and daily success records remain compatible.
+
 Unanswered means no human reply by someone with a selected staff role. A staff reply does not resolve a report; only the Squashed tag does. Starter posts, bots, webhooks and system messages do not count. Staff membership is checked at scan time; departed staff may no longer be recognized. Deleted posts cannot be included.
 
 Keep one instance running on an always-on machine. Closing the terminal or sleeping the computer stops it. The schedule is checked every 20 seconds. Starting late catches up for today; success is recorded in `daily-state.json`. If setup finishes after today's selected time, today's worklist is sent shortly unless already sent. Failures retry after five minutes. A partially sent multi-message worklist may repeat earlier parts on retry.

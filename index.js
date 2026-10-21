@@ -8,6 +8,7 @@ import { readFileSync, writeFileSync, renameSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { centralDate, parseTime, sendWorklist } from './worklist.js';
 import { startHourlyPing, sendPing, pingThreadId } from './hourly-ping.js';
+import { reportKey, reportLabel, findReport } from './reports.js';
 
 const file = name => fileURLToPath(new URL(name, import.meta.url));
 function read(name) {
@@ -23,20 +24,23 @@ if (!token) throw new Error('Set DISCORD_BOT_TOKEN in .env or your environment.'
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 const sessions = new Map();
 const setup = new SlashCommandBuilder().setName('setup')
-  .setDescription('Choose bug forum, worklist channel, staff roles and daily time')
+  .setDescription('Configure a Bugs or Suggestions report and daily time')
   .setContexts(InteractionContextType.BotDM);
 const worklistCommand = new SlashCommandBuilder().setName('worklist')
-  .setDescription('Send a fresh bug worklist to the configured report channel')
+  .setDescription('Send a fresh Bugs or Suggestions report')
+  .addStringOption(option => option.setName('type').setDescription('Report type (default: Bugs)')
+    .addChoices({ name: 'Bugs', value: 'bugs' }, { name: 'Suggestions', value: 'suggestions' }))
   .setContexts(InteractionContextType.Guild, InteractionContextType.BotDM);
 const sending = new Set();
 const pingCommand = new SlashCommandBuilder().setName('ping')
   .setDescription('Send a test ping in the hourly ping thread')
   .setContexts(InteractionContextType.Guild, InteractionContextType.BotDM);
 async function sendFresh(config) {
-  if (sending.has(config.guild_id)) throw new Error('A worklist is already being generated for this server.');
-  sending.add(config.guild_id);
+  const key = reportKey(config);
+  if (sending.has(key)) throw new Error('This report is already being generated.');
+  sending.add(key);
   try { await sendWorklist(client.rest, config); }
-  finally { sending.delete(config.guild_id); }
+  finally { sending.delete(key); }
 }
 const canManage = async (guild, user) => (await guild.members.fetch({ user, force: true })).permissions.has(PermissionFlagsBits.ManageGuild);
 
@@ -52,7 +56,7 @@ function menu(s) {
   );
   if (s.step === 'roles') buttons.addComponents(new ButtonBuilder().setCustomId(`${s.id}:done`).setLabel('Use selected roles').setStyle(ButtonStyle.Primary));
   return { content: `${s.title} — page ${s.page + 1}/${Math.ceil(s.options.length / 25)}` +
-    (s.step === 'roles' ? `\n${s.selected.size} staff roles selected. Selections carry across pages.` : ''),
+    (s.step === 'roles' ? `\n${s.selected.size} roles selected. Selections carry across pages.` : ''),
     components: [new ActionRowBuilder().addComponents(select), buttons], allowedMentions: { parse: [] } };
 }
 function next(s, step, title, options) {
@@ -77,7 +81,7 @@ client.on(Events.InteractionCreate, async i => {
       const configs = read('servers.json');
       if (i.inGuild()) {
         const guild = await client.guilds.fetch(i.guildId);
-        const config = configs[i.guildId];
+        const config = findReport(configs, i.guildId, i.options.getString('type') ?? 'bugs');
         if (!config) throw new Error('DM me /setup to configure this server first.');
         if (i.channelId !== config.output_channel_id) throw new Error('Use /worklist in the configured report channel.');
         if (!await canManage(guild, i.user.id)) throw new Error('Manage Server permission is required.');
@@ -86,8 +90,10 @@ client.on(Events.InteractionCreate, async i => {
       } else {
         const options = [];
         for (const guild of client.guilds.cache.values()) {
-          if (!configs[guild.id]) continue;
-          try { if (await canManage(guild, i.user.id)) options.push({ label: guild.name, value: guild.id }); }
+          const reports = Object.entries(configs).filter(([, c]) => c.guild_id === guild.id &&
+            (!i.options.getString('type') || (c.report_type ?? 'bugs') === i.options.getString('type')));
+          if (!reports.length) continue;
+          try { if (await canManage(guild, i.user.id)) for (const [key, config] of reports) options.push({ label: `${guild.name} — ${reportLabel(config)}`, value: key }); }
           catch (error) { if (error.status !== 404 && error.status !== 403) throw error; }
         }
         if (!options.length) throw new Error('No configured servers you can manage. Use /setup first.');
@@ -98,7 +104,7 @@ client.on(Events.InteractionCreate, async i => {
         } else {
           const session = {id: randomUUID(), user: i.user.id, expires: Date.now() + 15 * 60000};
           sessions.set(i.user.id, session);
-          await i.editReply(next(session, 'run', 'Choose the server for a fresh worklist', options));
+          await i.editReply(next(session, 'run', 'Choose the server and report', options));
         }
       }
       return;
@@ -143,15 +149,15 @@ client.on(Events.InteractionCreate, async i => {
       if (forum?.type !== ChannelType.GuildForum || output?.type !== ChannelType.GuildText) throw new Error('Selected channels changed. Run /setup again.');
       if (!forum.permissionsFor(me).has([PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory]) ||
           !output.permissionsFor(me).has([PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages])) throw new Error('Give me View Channel and Read Message History in the forum, and View Channel and Send Messages in the worklist channel. Then try again.');
-      if (!forum.availableTags.some(t => t.name.toLowerCase() === 'squashed')) throw new Error('Add a Squashed tag to the bug forum, then try again.');
+      if (s.config.report_type !== 'suggestions' && !forum.availableTags.some(t => t.name.toLowerCase() === 'squashed')) throw new Error('Add a Squashed tag to the bug forum, then try again.');
       const roles = await s.guild.roles.fetch();
       if (!s.config.staff_role_ids.every(role => roles.has(role))) throw new Error('A role was deleted. Run /setup again.');
       s.config.daily_time = dailyTime;
       const configs = read('servers.json');
-      configs[s.guild.id] = s.config;
+      configs[reportKey(s.config)] = s.config;
       save('servers.json', configs);
       sessions.delete(i.user.id);
-      await i.editReply({ content: `Saved! Bugs: <#${forum.id}>. Worklist: <#${output.id}>.\nStaff roles: ${s.config.staff_role_ids.map(r => `<@&${r}>`).join(', ')}\nDaily at **${dailyTime}, fixed UTC−6** (no daylight saving).\nUnanswered means no staff reply. Squashed reports are skipped.\nIf today's time has passed, the worklist will be sent shortly.`, allowedMentions: { parse: [] } });
+      await i.editReply({ content: `Saved! ${reportLabel(s.config)}: <#${forum.id}>. Worklist: <#${output.id}>.\n${s.config.report_type === 'suggestions' ? 'Manager/owner' : 'Staff'} roles: ${s.config.staff_role_ids.map(r => `<@&${r}>`).join(', ')}\nDaily at **${dailyTime}, fixed UTC−6** (no daylight saving).\n${s.config.report_type === 'suggestions' ? 'Only manager/owner replies count as feedback received. General staff replies still await review. All suggestions are included.' : 'Unanswered means no staff reply. Squashed reports are skipped.'}\nIf today's time has passed, the worklist will be sent shortly.`, allowedMentions: { parse: [] } });
       return;
     }
     if (s.step === 'time') throw new Error('Use Set daily time to continue.');
@@ -169,9 +175,9 @@ client.on(Events.InteractionCreate, async i => {
       }
       await i.deferUpdate();
       if (s.step === 'run') {
-        const guild = client.guilds.cache.get(i.values[0]);
+        const config = read('servers.json')[i.values[0]];
+        const guild = config && client.guilds.cache.get(config.guild_id);
         if (!guild || !await canManage(guild, i.user.id)) throw new Error('Manage Server permission is required.');
-        const config = read('servers.json')[guild.id];
         if (!config) throw new Error('Use /setup first.');
         sessions.delete(i.user.id);
         await i.editReply({content: 'Generating a fresh worklist...', components: []});
@@ -184,19 +190,25 @@ client.on(Events.InteractionCreate, async i => {
         if (!s.guild || !await canManage(s.guild, i.user.id)) throw new Error('Manage Server permission is required.');
         s.config.guild_id = s.guild.id;
         s.channels = await s.guild.channels.fetch();
-        await i.editReply(next(s, 'forum', 'Choose the bugs forum', [...s.channels.values()].filter(c => c?.type === ChannelType.GuildForum).map(c => ({ label: `#${c.name}`, value: c.id }))));
+        await i.editReply(next(s, 'type', 'Choose report type', [
+          { label: 'Bugs', value: 'bugs' }, { label: 'Suggestions', value: 'suggestions' },
+        ]));
+      } else if (s.step === 'type') {
+        s.config.report_type = i.values[0];
+        s.config.resolved_tag_names = s.config.report_type === 'suggestions' ? [] : ['Squashed'];
+        await i.editReply(next(s, 'forum', `Choose the ${s.config.report_type} forum`, [...s.channels.values()].filter(c => c?.type === ChannelType.GuildForum).map(c => ({ label: `#${c.name}`, value: c.id }))));
       } else if (s.step === 'forum') {
         s.config.forum_channel_id = i.values[0];
         await i.editReply(next(s, 'output', 'Choose the worklist text channel', [...s.channels.values()].filter(c => c?.type === ChannelType.GuildText).map(c => ({ label: `#${c.name}`, value: c.id }))));
       } else if (s.step === 'output') {
         s.config.output_channel_id = i.values[0];
         const roles = await s.guild.roles.fetch();
-        await i.editReply(next(s, 'roles', 'Choose all staff roles', [...roles.values()].filter(r => r.id !== s.guild.id && !r.managed).map(r => ({ label: r.name, value: r.id }))));
+        await i.editReply(next(s, 'roles', s.config.report_type === 'suggestions' ? 'Choose manager/owner roles' : 'Choose all staff roles', [...roles.values()].filter(r => r.id !== s.guild.id && !r.managed).map(r => ({ label: r.name, value: r.id }))));
       }
       return;
     }
     if (action === 'done' && s.step === 'roles') {
-      if (!s.selected.size) throw new Error('Choose at least one staff role.');
+      if (!s.selected.size) throw new Error('Choose at least one role.');
       s.config.staff_role_ids = [...s.selected];
       s.step = 'time';
       await i.update({ content: 'Choose the daily time in fixed UTC−6.', components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`${s.id}:time`).setLabel('Set daily time').setStyle(ButtonStyle.Primary))] });
@@ -244,7 +256,7 @@ client.once(Events.ClientReady, async () => {
     await client.application.commands.create(setup.toJSON());
     await client.application.commands.create(worklistCommand.toJSON());
     await client.application.commands.create(pingCommand.toJSON());
-    for (const guildId of Object.keys(read('servers.json'))) {
+    for (const guildId of new Set(Object.values(read('servers.json')).map(c => c.guild_id))) {
       const { contexts, integration_types, ...guildCommand } = worklistCommand.toJSON();
       await client.application.commands.create(guildCommand, guildId);
       const { contexts: pingContexts, integration_types: pingIntegrationTypes, ...guildPingCommand } = pingCommand.toJSON();

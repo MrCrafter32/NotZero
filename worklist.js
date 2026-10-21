@@ -52,9 +52,10 @@ export async function answered(rest, config, thread, cache) {
 export async function worklist(rest, config) {
   const forum = await rest.get(`/channels/${config.forum_channel_id}`);
   if (forum.type !== 15 || forum.guild_id !== config.guild_id) throw new Error('Source must be a forum in the configured server');
-  const names = (config.resolved_tag_names ?? ['Squashed']).map(n => n.toLowerCase());
+  const suggestions = config.report_type === 'suggestions';
+  const names = (suggestions ? [] : (config.resolved_tag_names ?? ['Squashed'])).map(n => n.toLowerCase());
   const resolved = new Set(forum.available_tags.filter(t => names.includes(t.name.toLowerCase())).map(t => t.id));
-  if (!resolved.size) throw new Error('Add a Squashed tag to the forum');
+  if (!suggestions && !resolved.size) throw new Error('Add a Squashed tag to the forum');
   const groups = [[], []];
   const cache = new Map();
   const all = (await threads(rest, config)).sort((a, b) => BigInt(a.id) < BigInt(b.id) ? -1 : 1);
@@ -64,8 +65,11 @@ export async function worklist(rest, config) {
     const hasReply = await answered(rest, config, thread, cache);
     groups[Number(hasReply)].push(`- [${title}](https://discord.com/channels/${config.guild_id}/${thread.id})`);
   }
-  const lines = ['**Daily bug worklist**', 'Open means no resolved tag; archived posts are included.'];
-  ['Awaiting a staff reply', 'Open — staff already replied'].forEach((label, i) => {
+  const lines = suggestions
+    ? ['**Daily suggestions worklist**', 'All suggestions, including archived posts. Only manager/owner replies count as feedback received.']
+    : ['**Daily bug worklist**', 'Open means no resolved tag; archived posts are included.'];
+  const labels = suggestions ? ['Awaiting management review', 'Feedback received'] : ['Awaiting a staff reply', 'Open — staff already replied'];
+  labels.forEach((label, i) => {
     lines.push(`\n**${label} (${groups[i].length})**`, ...(groups[i].length ? groups[i] : ['None.']));
   });
   const chunks = [];
@@ -73,7 +77,7 @@ export async function worklist(rest, config) {
   for (const line of lines) {
     if (current.length + line.length + 1 > 1900) {
       chunks.push(current);
-      current = '**Bug worklist — continued**\n';
+      current = suggestions ? '**Suggestions worklist — continued**\n' : '**Bug worklist — continued**\n';
     }
     current += line + '\n';
   }
