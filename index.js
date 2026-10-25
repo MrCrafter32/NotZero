@@ -250,7 +250,7 @@ async function tick() {
   finally { running = false; }
 }
 client.once(Events.ClientReady, async () => {
-  startHourlyPing(client.rest);
+  // startHourlyPing(client.rest);
   try {
     // Upsert only this command, preserving any unrelated application commands.
     await client.application.commands.create(setup.toJSON());
