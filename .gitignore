@@ -1,12 +1,4 @@
-config.json
-state.json
-state.tmp
 .venv/
 __pycache__/
 .env
-servers.json
-servers.tmp
-daily-state.json
-daily-state.tmp
 node_modules/
-*.json.tmp

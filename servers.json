@@ -1,0 +1,17 @@
+{
+  "1441876771560493087": {
+    "timezone": "Etc/GMT+6",
+    "resolved_tag_names": [
+      "Squashed"
+    ],
+    "unanswered_mode": "staff",
+    "staff_user_ids": [],
+    "guild_id": "1441876771560493087",
+    "forum_channel_id": "1451063537605541958",
+    "output_channel_id": "1562315725975060490",
+    "staff_role_ids": [
+      "1441877619762266112"
+    ],
+    "daily_time": "08:00"
+  }
+}
